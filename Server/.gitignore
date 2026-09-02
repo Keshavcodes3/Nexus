@@ -1,0 +1,69 @@
+# Environment variables and secret keys
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+*.key
+*.cert
+
+# Node.js / Package Managers
+node_modules/
+jspm_packages/
+.npm
+.yarn/
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+yarn-debug.log*
+yarn-error.log*
+yarn-path.js
+npm-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Build and output directories
+dist/
+build/
+out/
+lib/
+.next/
+.nuxt/
+*.tsbuildinfo
+
+# Database & Storage
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-journal
+postgres-data/
+redis-data/
+uploads/
+tmp/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Testing & Coverage
+coverage/
+.nyc_output/
+.vitest/
+
+# Docker / Infrastructure
+docker-compose.override.yml
+
+# IDE & Editor settings
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# OS / Misc
+.tmp
