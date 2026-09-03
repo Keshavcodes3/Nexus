@@ -30,6 +30,7 @@ export interface CreateServerDTO {
     settings?: ServerSettingsDTO | undefined;
     memberCount?: number | undefined;
     channelCount?: number | undefined;
+    idempotencyKey: string,
 }
 
 export type createServerDTO = CreateServerDTO;
