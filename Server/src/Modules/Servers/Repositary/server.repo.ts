@@ -12,7 +12,6 @@ export class ServerRepository {
     private readonly model = Server;
 
     async create(data: CreateServerDTO): Promise<ServerDocument> {
-        // persist server - strip undefined for exactOptionalPropertyTypes
         const cleaned = Object.fromEntries(
             Object.entries(data).filter(([, v]) => v !== undefined),
         ) as CreateServerDTO;

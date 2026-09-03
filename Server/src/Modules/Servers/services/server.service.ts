@@ -8,6 +8,8 @@ import mongoose, { Types } from "mongoose";
 import { serverClass } from "../Repositary/server.repo.js";
 import { Member } from "../../Channels/Schema/member.schema.js";
 import { IdempotencyRepository } from "../../../shared/Idempotency/idempotency.repo.js";
+import { OutboxRepository } from "../../../shared/Outbox/outbox.repo.js";
+import { OutboxEventStatus, OutboxEventType } from "../../../shared/Outbox/outbox.schema.js";
 
 
 class serverServiceClass {
@@ -17,12 +19,14 @@ class serverServiceClass {
     constructor(
         private readonly userRepo = new UserRepository(),
         private readonly serverRepo = new serverClass(),
-        private readonly idempotencyRepo = new IdempotencyRepository()
+        private readonly idempotencyRepo = new IdempotencyRepository(),
+        private readonly outboxRepo = new OutboxRepository()
     ) { }
 
     createServer = async (data: createServerDTO) => {
         const { name, description, icon, ownerId, idempotencyKey } = data
-        if (!idempotencyKey) throw new ApiError({ code: "IDEMPOTENCY_KEY_REQUIRED", message: "Idempotency key required", statusCode: 400 })
+        if (!idempotencyKey)
+            throw new ApiError({ code: "IDEMPOTENCY_KEY_REQUIRED", message: "Idempotency key required", statusCode: 400 })
         const userId = new Types.ObjectId(ownerId)
         validate({
             name: name,
@@ -56,7 +60,7 @@ class serverServiceClass {
                     }
                 }
 
-                // Create PROCESSING record inside same transaction
+
                 const idempotencyRecord = await this.idempotencyRepo.create(
                     {
                         userId,
@@ -89,6 +93,28 @@ class serverServiceClass {
                     userId,
                     role: "OWNER" as const,
                 }], { session })
+
+                await this.outboxRepo.create({
+                    eventId: crypto.randomUUID(),
+
+                    type: OutboxEventType.SERVER_CREATED,
+
+                    aggregateType: "SERVER",
+
+                    aggregateId: server._id,
+                    payload: {
+                        serverId: server._id.toString(),
+                        ownerId: userId.toString(),
+                        name: server.name,
+                    },
+
+                    status: OutboxEventStatus.PENDING,
+
+                    attempts: 0,
+
+                    availableAt: new Date(),
+                }, session)
+
 
                 const responseBody = toServerResponseDTO(server as never)
                 const response = { statusCode: 201, body: responseBody }
@@ -141,7 +167,7 @@ class serverServiceClass {
         if (!serverId || !Types.ObjectId.isValid(String(serverId))) {
             throw new ApiError({ code: "INVALID_SERVER_ID", message: "Invalid server id", statusCode: 400 })
         }
-  
+
         const payload: UpdateServerDTO = {}
         if (data.title !== undefined) payload.name = data.title
         if (data.name !== undefined) payload.name = data.name
