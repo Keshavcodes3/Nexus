@@ -28,12 +28,12 @@ export class ServerRepository {
             }
         }
 
-        return this.model.create(cleaned as never);
+        return await this.model.create(cleaned as never);
     }
 
     async findById(serverId: ObjectIdLike): Promise<ServerDocument | null> {
         // retrieve server
-        return this.model.findById(toObjectId(serverId)).exec();
+        return await this.model.findById(toObjectId(serverId)).exec();
     }
 
     async findBySlug(slug: string): Promise<ServerDocument | null> {

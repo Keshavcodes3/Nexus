@@ -23,7 +23,6 @@ export interface ServerSettingsDTO {
 
 export interface CreateServerDTO {
     name: string;
-    slug: string;
     description?: string | undefined;
     icon?: ServerIconDTO | null | undefined;
     ownerId: Types.ObjectId;
