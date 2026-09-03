@@ -2,32 +2,32 @@ import { UserModel, type UserDocument } from "../schema/user.schema.js";
 
 export class UserRepository {
     async findById(id: string): Promise<UserDocument | null> {
-        return UserModel.findById(id).exec();
+        return await UserModel.findById(id).exec();
     }
 
     async findByIdWithPassword(id: string): Promise<UserDocument | null> {
-        return UserModel.findById(id).select("+passwordHash").exec();
+        return await UserModel.findById(id).select("+passwordHash").exec();
     }
 
     async findByEmail(email: string): Promise<UserDocument | null> {
-        return UserModel.findOne({ email: email.toLowerCase() }).exec();
+        return await UserModel.findOne({ email: email.toLowerCase() }).exec();
     }
 
     async findByEmailWithPassword(email: string): Promise<UserDocument | null> {
-        return UserModel.findOne({ email: email.toLowerCase() })
+        return await UserModel.findOne({ email: email.toLowerCase() })
             .select("+passwordHash")
             .exec();
     }
 
     async findByUsername(username: string): Promise<UserDocument | null> {
-        return UserModel.findOne({ username: username.toLowerCase() }).exec();
+        return await UserModel.findOne({ username: username.toLowerCase() }).exec();
     }
 
     async findByEmailOrUsername(
         email: string,
         username: string,
     ): Promise<UserDocument | null> {
-        return UserModel.findOne({
+        return await UserModel.findOne({
             $or: [
                 { email: email.toLowerCase() },
                 { username: username.toLowerCase() },
@@ -39,7 +39,7 @@ export class UserRepository {
         identifier: string,
     ): Promise<UserDocument | null> {
         const lower = identifier.toLowerCase();
-        return UserModel.findOne({
+        return await UserModel.findOne({
             $or: [{ email: lower }, { username: lower }],
         })
             .select("+passwordHash")
@@ -55,7 +55,7 @@ export class UserRepository {
         id: string,
         data: Partial<UserDocument>,
     ): Promise<UserDocument | null> {
-        return UserModel.findByIdAndUpdate(id, data, { new: true }).exec();
+        return await UserModel.findByIdAndUpdate(id, data, { new: true }).exec();
     }
 
     async search(
@@ -63,7 +63,7 @@ export class UserRepository {
         limit = 10,
     ): Promise<UserDocument[]> {
         if (!query.trim()) return [];
-        return UserModel.find({
+        return await UserModel.find({
             $or: [
                 { username: { $regex: query, $options: "i" } },
                 { displayName: { $regex: query, $options: "i" } },
