@@ -8,6 +8,7 @@ import { logger } from "./lib/logger.js";
 import { errorMiddleware } from "./Middlewares/errorMiddleware.js";
 import authRoutes from "./Modules/Auth/routes/auth.routes.js";
 import userRoutes from "./Modules/Users/routes/user.routes.js";
+import serverRoutes from "./Modules/Servers/routes/server.routes.js";
 
 export function createApp() {
     const app = express();
@@ -32,6 +33,7 @@ export function createApp() {
     // Modules
     app.use("/api/auth", authRoutes);
     app.use("/api/users", userRoutes);
+    app.use("/api/servers", serverRoutes);
 
     // 404
     app.use((_req, res) => {

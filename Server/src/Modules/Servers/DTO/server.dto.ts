@@ -1,4 +1,5 @@
 import { Types } from "mongoose";
+import { z } from "zod";
 import {
     ServerStatus,
     VerificationLevel,
@@ -90,3 +91,50 @@ export function toServerResponseDTO(doc: IServer & { _id: Types.ObjectId; create
         updatedAt: doc.updatedAt,
     };
 }
+
+// Zod schemas moved from controller - single source of truth for validation
+export const createServerSchema = z.object({
+    name: z.string().min(1, "Name is required").max(100).trim(),
+    description: z.string().max(500).trim().optional(),
+    icon: z
+        .object({
+            url: z.string().url(),
+            publicId: z.string().trim().optional(),
+        })
+        .nullable()
+        .optional(),
+    settings: z
+        .object({
+            isPublic: z.boolean().optional(),
+            allowInvites: z.boolean().optional(),
+            verificationLevel: z.enum(["NONE", "LOW", "MEDIUM", "HIGH"]).optional(),
+            isDeleted: z.boolean().optional(),
+        })
+        .optional(),
+});
+
+export const updateServerSchema = z.object({
+    name: z.string().min(1).max(100).trim().optional(),
+    title: z.string().min(1).max(100).trim().optional(),
+    description: z.string().max(500).trim().nullable().optional(),
+    slug: z.string().min(1).max(100).trim().optional(),
+    icon: z
+        .object({
+            url: z.string().url(),
+            publicId: z.string().trim().optional(),
+        })
+        .nullable()
+        .optional(),
+    settings: z
+        .object({
+            isPublic: z.boolean().optional(),
+            allowInvites: z.boolean().optional(),
+            verificationLevel: z.enum(["NONE", "LOW", "MEDIUM", "HIGH"]).optional(),
+            isDeleted: z.boolean().optional(),
+        })
+        .optional(),
+    status: z.enum(["ACTIVE", "SUSPENDED", "DELETED"]).optional(),
+});
+
+export type CreateServerInput = z.infer<typeof createServerSchema>;
+export type UpdateServerInput = z.infer<typeof updateServerSchema>;

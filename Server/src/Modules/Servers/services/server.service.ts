@@ -25,27 +25,33 @@ class serverServiceClass {
 
     createServer = async (data: createServerDTO) => {
         const { name, description, icon, ownerId, idempotencyKey } = data
-        if (!idempotencyKey)
-            throw new ApiError({ code: "IDEMPOTENCY_KEY_REQUIRED", message: "Idempotency key required", statusCode: 400 })
+        if (!idempotencyKey) {
+            throw new ApiError(
+                {
+                    code: "IDEMPOTENCY_KEY_REQUIRED",
+                    message: "Idempotency key required",
+                    statusCode: 400
+                }
+            )
+        }
+
         const userId = new Types.ObjectId(ownerId)
-        validate({
-            name: name,
-            description: description || "",
-            ownerID: userId
-        })
+        validate({ name, description: description as string, ownerID: userId })
         const session = await mongoose.startSession()
+        let result;
         try {
-            let result: ReturnType<typeof toServerResponseDTO> | null = null
             await session.withTransaction(async () => {
-                const owner = await this.userDB.findById(userId).session(session).exec()
+                const owner = await this.userDB
+                    .findById(userId.toString())
+                    .session(session).exec()
                 if (!owner) throw new ApiError({
                     code: "USER_NOT_FOUND",
                     message: "Owner not found",
                     statusCode: 404
                 })
-
-                // Idempotency check - must use same operation name for find & create
+                //check for ideompotency
                 const existing = await this.idempotencyRepo.find(userId, "CREATE_SERVER", idempotencyKey, session)
+                let result;
                 if (existing) {
                     if (existing.status === "COMPLETED") {
                         result = existing.response?.body as ReturnType<typeof toServerResponseDTO>
@@ -60,7 +66,6 @@ class serverServiceClass {
                     }
                 }
 
-
                 const idempotencyRecord = await this.idempotencyRepo.create(
                     {
                         userId,
@@ -68,12 +73,11 @@ class serverServiceClass {
                         operation: "CREATE_SERVER",
                         status: "PROCESSING",
                         lockedAt: new Date(),
-                    },
-                    session
-                )
-                if (!idempotencyRecord) throw new ApiError({ code: "IDEMPOTENCY_FAILED", message: "Failed to create idempotency record", statusCode: 500 })
+                    }, session)
 
+                if (!idempotencyRecord) throw new ApiError({ code: "IDEMPOTENCY_FAILED", message: "Failed to create idempotency record", statusCode: 500 })
                 const slug = generateSlug(name)
+
                 const [server] = await this.serverDB.create([
                     {
                         name: name,
@@ -93,29 +97,6 @@ class serverServiceClass {
                     userId,
                     role: "OWNER" as const,
                 }], { session })
-
-                await this.outboxRepo.create({
-                    eventId: crypto.randomUUID(),
-
-                    type: OutboxEventType.SERVER_CREATED,
-
-                    aggregateType: "SERVER",
-
-                    aggregateId: server._id,
-                    payload: {
-                        serverId: server._id.toString(),
-                        ownerId: userId.toString(),
-                        name: server.name,
-                    },
-
-                    status: OutboxEventStatus.PENDING,
-
-                    attempts: 0,
-
-                    availableAt: new Date(),
-                }, session)
-
-
                 const responseBody = toServerResponseDTO(server as never)
                 const response = { statusCode: 201, body: responseBody }
 
@@ -123,13 +104,14 @@ class serverServiceClass {
 
                 result = responseBody
             })
-            return result
         } catch (err) {
             if (err instanceof ApiError) throw err
             throw new ApiError({ code: "SERVER_CREATE_FAILED", message: err instanceof Error ? err.message : "Failed to create server", statusCode: 500 })
+
         } finally {
             await session.endSession()
         }
+        return result
     }
 
     getServerById = async (serverId: string | Types.ObjectId) => {
@@ -160,8 +142,15 @@ class serverServiceClass {
         return toServerResponseDTO(server as never)
     }
 
+    private assertOwner = (server: { ownerId: Types.ObjectId | string }, requesterId: string | Types.ObjectId) => {
+        if (server.ownerId.toString() !== String(requesterId)) {
+            throw new ApiError({ code: "FORBIDDEN", message: "Only owner can perform this action", statusCode: 403 })
+        }
+    }
+
     updateServer = async (
         serverId: string | Types.ObjectId,
+        requesterId: string | Types.ObjectId,
         data: UpdateServerDTO & { title?: string }
     ) => {
         if (!serverId || !Types.ObjectId.isValid(String(serverId))) {
@@ -194,6 +183,7 @@ class serverServiceClass {
 
         const existing = await this.serverRepo.findById(serverId)
         if (!existing) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        this.assertOwner(existing as never, requesterId)
         if (existing.status === ServerStatus.DELETED) throw new ApiError({ code: "SERVER_DELETED", message: "Cannot update deleted server", statusCode: 410 })
         if (existing.status === ServerStatus.SUSPENDED) throw new ApiError({ code: "SERVER_ARCHIVED", message: "Cannot update archived server, restore first", statusCode: 403 })
 
@@ -202,12 +192,13 @@ class serverServiceClass {
         return toServerResponseDTO(updated as never)
     }
 
-    deleteServer = async (serverId: string | Types.ObjectId) => {
+    deleteServer = async (serverId: string | Types.ObjectId, requesterId: string | Types.ObjectId) => {
         if (!serverId || !Types.ObjectId.isValid(String(serverId))) {
             throw new ApiError({ code: "INVALID_SERVER_ID", message: "Invalid server id", statusCode: 400 })
         }
         const existing = await this.serverRepo.findById(serverId)
         if (!existing) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        this.assertOwner(existing as never, requesterId)
         if (existing.status === ServerStatus.DELETED) {
             throw new ApiError({ code: "SERVER_ALREADY_DELETED", message: "Server already deleted", statusCode: 409 })
         }
@@ -216,12 +207,13 @@ class serverServiceClass {
         return toServerResponseDTO(deleted as never)
     }
 
-    archiveServer = async (serverId: string | Types.ObjectId) => {
+    archiveServer = async (serverId: string | Types.ObjectId, requesterId: string | Types.ObjectId) => {
         if (!serverId || !Types.ObjectId.isValid(String(serverId))) {
             throw new ApiError({ code: "INVALID_SERVER_ID", message: "Invalid server id", statusCode: 400 })
         }
         const existing = await this.serverRepo.findById(serverId)
         if (!existing) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        this.assertOwner(existing as never, requesterId)
         if (existing.status === ServerStatus.DELETED) throw new ApiError({ code: "SERVER_DELETED", message: "Cannot archive deleted server", statusCode: 410 })
         if (existing.status === ServerStatus.SUSPENDED) throw new ApiError({ code: "SERVER_ALREADY_ARCHIVED", message: "Server already archived", statusCode: 409 })
 
@@ -230,12 +222,13 @@ class serverServiceClass {
         return toServerResponseDTO(archived as never)
     }
 
-    restoreServer = async (serverId: string | Types.ObjectId) => {
+    restoreServer = async (serverId: string | Types.ObjectId, requesterId: string | Types.ObjectId) => {
         if (!serverId || !Types.ObjectId.isValid(String(serverId))) {
             throw new ApiError({ code: "INVALID_SERVER_ID", message: "Invalid server id", statusCode: 400 })
         }
         const existing = await this.serverRepo.findById(serverId)
         if (!existing) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        this.assertOwner(existing as never, requesterId)
         if (existing.status === ServerStatus.ACTIVE) {
             throw new ApiError({ code: "SERVER_ALREADY_ACTIVE", message: "Server is already active", statusCode: 409 })
         }
