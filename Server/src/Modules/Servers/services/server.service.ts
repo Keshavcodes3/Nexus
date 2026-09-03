@@ -1,6 +1,6 @@
-import { Server } from "../schema/server.schema.js";
+import { Server, ServerStatus } from "../schema/server.schema.js";
 import { UserModel, UserRepository } from "../../Users/index.js";
-import { createServerDTO, toServerResponseDTO } from "../DTO/server.dto.js";
+import { createServerDTO, toServerResponseDTO, type UpdateServerDTO } from "../DTO/server.dto.js";
 import { ApiError } from "../../../shared/HTTP/api-error.js";
 import { validate } from "../utils/validateData.js";
 import { generateSlug } from "../utils/generateSlug.js";
@@ -39,6 +39,8 @@ class serverServiceClass {
                     message: "Owner not found",
                     statusCode: 404
                 })
+
+                // Idempotency check - must use same operation name for find & create
                 const existing = await this.idempotencyRepo.find(userId, "CREATE_SERVER", idempotencyKey, session)
                 if (existing) {
                     if (existing.status === "COMPLETED") {
@@ -54,7 +56,7 @@ class serverServiceClass {
                     }
                 }
 
-
+                // Create PROCESSING record inside same transaction
                 const idempotencyRecord = await this.idempotencyRepo.create(
                     {
                         userId,
@@ -102,6 +104,123 @@ class serverServiceClass {
         } finally {
             await session.endSession()
         }
+    }
+
+    getServerById = async (serverId: string | Types.ObjectId) => {
+        if (!serverId || !Types.ObjectId.isValid(String(serverId))) {
+            throw new ApiError({ code: "INVALID_SERVER_ID", message: "Invalid server id", statusCode: 400 })
+        }
+        const server = await this.serverRepo.findById(serverId)
+        if (!server) {
+            throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        }
+        if (server.status === ServerStatus.DELETED) {
+            throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        }
+        return toServerResponseDTO(server as never)
+    }
+
+    getServerBySlug = async (slug: string) => {
+        if (!slug || !slug.trim()) {
+            throw new ApiError({ code: "INVALID_SLUG", message: "Slug is required", statusCode: 400 })
+        }
+        const server = await this.serverRepo.findBySlug(slug)
+        if (!server) {
+            throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        }
+        if (server.status === ServerStatus.DELETED) {
+            throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        }
+        return toServerResponseDTO(server as never)
+    }
+
+    updateServer = async (
+        serverId: string | Types.ObjectId,
+        data: UpdateServerDTO & { title?: string }
+    ) => {
+        if (!serverId || !Types.ObjectId.isValid(String(serverId))) {
+            throw new ApiError({ code: "INVALID_SERVER_ID", message: "Invalid server id", statusCode: 400 })
+        }
+  
+        const payload: UpdateServerDTO = {}
+        if (data.title !== undefined) payload.name = data.title
+        if (data.name !== undefined) payload.name = data.name
+        if (data.description !== undefined) payload.description = data.description
+        if (data.icon !== undefined) payload.icon = data.icon
+        if (data.settings !== undefined) payload.settings = data.settings
+        if (data.status !== undefined) payload.status = data.status
+
+        if (payload.name !== undefined) {
+            const trimmed = payload.name.trim()
+            if (!trimmed) throw new ApiError({ code: "INVALID_NAME", message: "Server name cannot be empty", statusCode: 400 })
+            if (trimmed.length > 100) throw new ApiError({ code: "INVALID_NAME", message: "Server name too long", statusCode: 400 })
+            payload.name = trimmed
+            // keep slug in sync with name if slug not explicitly provided
+            if (data.slug === undefined) {
+                payload.slug = generateSlug(trimmed)
+            }
+        }
+        if (data.slug !== undefined) payload.slug = data.slug.toLowerCase().trim()
+
+        if (Object.keys(payload).length === 0) {
+            throw new ApiError({ code: "NO_UPDATE_DATA", message: "No update data provided", statusCode: 400 })
+        }
+
+        const existing = await this.serverRepo.findById(serverId)
+        if (!existing) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        if (existing.status === ServerStatus.DELETED) throw new ApiError({ code: "SERVER_DELETED", message: "Cannot update deleted server", statusCode: 410 })
+        if (existing.status === ServerStatus.SUSPENDED) throw new ApiError({ code: "SERVER_ARCHIVED", message: "Cannot update archived server, restore first", statusCode: 403 })
+
+        const updated = await this.serverRepo.updateDetails(serverId, payload)
+        if (!updated) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        return toServerResponseDTO(updated as never)
+    }
+
+    deleteServer = async (serverId: string | Types.ObjectId) => {
+        if (!serverId || !Types.ObjectId.isValid(String(serverId))) {
+            throw new ApiError({ code: "INVALID_SERVER_ID", message: "Invalid server id", statusCode: 400 })
+        }
+        const existing = await this.serverRepo.findById(serverId)
+        if (!existing) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        if (existing.status === ServerStatus.DELETED) {
+            throw new ApiError({ code: "SERVER_ALREADY_DELETED", message: "Server already deleted", statusCode: 409 })
+        }
+        const deleted = await this.serverRepo.softDelete(serverId)
+        if (!deleted) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        return toServerResponseDTO(deleted as never)
+    }
+
+    archiveServer = async (serverId: string | Types.ObjectId) => {
+        if (!serverId || !Types.ObjectId.isValid(String(serverId))) {
+            throw new ApiError({ code: "INVALID_SERVER_ID", message: "Invalid server id", statusCode: 400 })
+        }
+        const existing = await this.serverRepo.findById(serverId)
+        if (!existing) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        if (existing.status === ServerStatus.DELETED) throw new ApiError({ code: "SERVER_DELETED", message: "Cannot archive deleted server", statusCode: 410 })
+        if (existing.status === ServerStatus.SUSPENDED) throw new ApiError({ code: "SERVER_ALREADY_ARCHIVED", message: "Server already archived", statusCode: 409 })
+
+        const archived = await this.serverRepo.updateDetails(serverId, { status: ServerStatus.SUSPENDED })
+        if (!archived) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        return toServerResponseDTO(archived as never)
+    }
+
+    restoreServer = async (serverId: string | Types.ObjectId) => {
+        if (!serverId || !Types.ObjectId.isValid(String(serverId))) {
+            throw new ApiError({ code: "INVALID_SERVER_ID", message: "Invalid server id", statusCode: 400 })
+        }
+        const existing = await this.serverRepo.findById(serverId)
+        if (!existing) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        if (existing.status === ServerStatus.ACTIVE) {
+            throw new ApiError({ code: "SERVER_ALREADY_ACTIVE", message: "Server is already active", statusCode: 409 })
+        }
+        // restore from DELETED or SUSPENDED -> ACTIVE, clear deletedAt and isDeleted flag
+        const restored = await this.serverRepo.updateDetails(serverId, {
+            status: ServerStatus.ACTIVE,
+            deletedAt: null,
+            settings: { isDeleted: false },
+        })
+        if (!restored) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+        return toServerResponseDTO(restored as never)
     }
 }
 
