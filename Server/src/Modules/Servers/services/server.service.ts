@@ -99,10 +99,24 @@ class serverServiceClass {
                 }], { session })
                 const responseBody = toServerResponseDTO(server as never)
                 const response = { statusCode: 201, body: responseBody }
-
+                await this.outboxRepo.create({
+                    eventId: crypto.randomUUID(),
+                    type: OutboxEventType.SERVER_CREATED,
+                    aggregateType: "SERVER",
+                    aggregateId: server._id,
+                    payload: {
+                        serverId: server._id.toString(),
+                        ownerId: userId.toString(),
+                        name: server.name,
+                    },
+                    attempts: 0,
+                    availableAt: new Date(),
+                    status: OutboxEventStatus.PENDING,
+                }, session)
                 await this.idempotencyRepo.complete(idempotencyRecord._id, response, session)
 
                 result = responseBody
+                return result
             })
         } catch (err) {
             if (err instanceof ApiError) throw err
