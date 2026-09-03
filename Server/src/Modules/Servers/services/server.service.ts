@@ -1,9 +1,18 @@
-import { Server, ServerStatus } from "../schema/server.schema.js";
+import { Server, ServerStatus, normalizeServerName } from "../schema/server.schema.js";
 import { UserModel, UserRepository } from "../../Users/index.js";
 import { createServerDTO, toServerResponseDTO, type UpdateServerDTO } from "../DTO/server.dto.js";
 import { ApiError } from "../../../shared/HTTP/api-error.js";
 import { validate } from "../utils/validateData.js";
 import { generateSlug } from "../utils/generateSlug.js";
+
+function isDuplicateKeyError(err: unknown): boolean {
+    return (
+        typeof err === "object" &&
+        err !== null &&
+        "code" in err &&
+        (err as { code: unknown }).code === 11000
+    );
+}
 import mongoose, { Types } from "mongoose";
 import { serverClass } from "../Repositary/server.repo.js";
 import { Member } from "../../Channels/Schema/member.schema.js";
@@ -35,10 +44,13 @@ class serverServiceClass {
             )
         }
 
+        const trimmedName = name.trim();
+        if (!trimmedName) throw new ApiError({ code: "INVALID_NAME", message: "Server name cannot be empty", statusCode: 400 });
+        const normalized = normalizeServerName(trimmedName);
         const userId = new Types.ObjectId(ownerId)
-        validate({ name, description: description as string, ownerID: userId })
+        validate({ name: trimmedName, description: description as string, ownerID: userId })
         const session = await mongoose.startSession()
-        let result;
+        let result: ReturnType<typeof toServerResponseDTO> | undefined;
         try {
             await session.withTransaction(async () => {
                 const owner = await this.userDB
@@ -49,9 +61,8 @@ class serverServiceClass {
                     message: "Owner not found",
                     statusCode: 404
                 })
-                //check for ideompotency
+                //check for idempotency
                 const existing = await this.idempotencyRepo.find(userId, "CREATE_SERVER", idempotencyKey, session)
-                let result;
                 if (existing) {
                     if (existing.status === "COMPLETED") {
                         result = existing.response?.body as ReturnType<typeof toServerResponseDTO>
@@ -66,6 +77,20 @@ class serverServiceClass {
                     }
                 }
 
+                // Best-practice: app-level uniqueness check for {ownerId, nameNormalized} (case/whitespace-insensitive)
+                const duplicate = await this.serverDB.findOne({
+                    ownerId: userId,
+                    nameNormalized: normalized,
+                    status: { $ne: ServerStatus.DELETED },
+                } as never).session(session).exec();
+                if (duplicate) {
+                    throw new ApiError({
+                        code: "SERVER_NAME_TAKEN",
+                        message: "You already have a server with this name",
+                        statusCode: 409,
+                    });
+                }
+
                 const idempotencyRecord = await this.idempotencyRepo.create(
                     {
                         userId,
@@ -76,11 +101,12 @@ class serverServiceClass {
                     }, session)
 
                 if (!idempotencyRecord) throw new ApiError({ code: "IDEMPOTENCY_FAILED", message: "Failed to create idempotency record", statusCode: 500 })
-                const slug = generateSlug(name)
+                const slug = generateSlug(trimmedName)
 
                 const [server] = await this.serverDB.create([
                     {
-                        name: name,
+                        name: trimmedName,
+                        nameNormalized: normalized,
                         ...(description !== undefined ? { description } : {}),
                         ...(icon !== undefined ? { icon } : {}),
                         ownerId: userId,
@@ -120,6 +146,15 @@ class serverServiceClass {
             })
         } catch (err) {
             if (err instanceof ApiError) throw err
+            if (isDuplicateKeyError(err)) {
+                const dupErr = err as { keyPattern?: Record<string, unknown>; keyValue?: Record<string, unknown> };
+                const isNameDup = dupErr.keyPattern?.["nameNormalized"] || dupErr.keyValue?.["nameNormalized"] || String((err as Error).message).includes("nameNormalized");
+                if (isNameDup) {
+                    throw new ApiError({ code: "SERVER_NAME_TAKEN", message: "You already have a server with this name", statusCode: 409 });
+                }
+                // slug collision (global unique) - should be rare due to hash, map to 409 as well
+                throw new ApiError({ code: "SERVER_CREATE_FAILED", message: "Server slug collision, please retry with a different name", statusCode: 409 });
+            }
             throw new ApiError({ code: "SERVER_CREATE_FAILED", message: err instanceof Error ? err.message : "Failed to create server", statusCode: 500 })
 
         } finally {
@@ -171,7 +206,7 @@ class serverServiceClass {
             throw new ApiError({ code: "INVALID_SERVER_ID", message: "Invalid server id", statusCode: 400 })
         }
 
-        const payload: UpdateServerDTO = {}
+        const payload: UpdateServerDTO & { nameNormalized?: string | undefined } = {}
         if (data.title !== undefined) payload.name = data.title
         if (data.name !== undefined) payload.name = data.name
         if (data.description !== undefined) payload.description = data.description
@@ -184,6 +219,7 @@ class serverServiceClass {
             if (!trimmed) throw new ApiError({ code: "INVALID_NAME", message: "Server name cannot be empty", statusCode: 400 })
             if (trimmed.length > 100) throw new ApiError({ code: "INVALID_NAME", message: "Server name too long", statusCode: 400 })
             payload.name = trimmed
+            payload.nameNormalized = normalizeServerName(trimmed)
             // keep slug in sync with name if slug not explicitly provided
             if (data.slug === undefined) {
                 payload.slug = generateSlug(trimmed)
@@ -201,9 +237,30 @@ class serverServiceClass {
         if (existing.status === ServerStatus.DELETED) throw new ApiError({ code: "SERVER_DELETED", message: "Cannot update deleted server", statusCode: 410 })
         if (existing.status === ServerStatus.SUSPENDED) throw new ApiError({ code: "SERVER_ARCHIVED", message: "Cannot update archived server, restore first", statusCode: 403 })
 
-        const updated = await this.serverRepo.updateDetails(serverId, payload)
-        if (!updated) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
-        return toServerResponseDTO(updated as never)
+        // Enforce {ownerId, nameNormalized} uniqueness on rename
+        if (payload.nameNormalized !== undefined) {
+            const dup = await this.serverDB.findOne({
+                ownerId: existing.ownerId,
+                nameNormalized: payload.nameNormalized,
+                _id: { $ne: existing._id },
+                status: { $ne: ServerStatus.DELETED },
+            } as never).exec();
+            if (dup) {
+                throw new ApiError({ code: "SERVER_NAME_TAKEN", message: "You already have a server with this name", statusCode: 409 });
+            }
+        }
+
+        try {
+            const updated = await this.serverRepo.updateDetails(serverId, payload as unknown as UpdateServerDTO)
+            if (!updated) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+            return toServerResponseDTO(updated as never)
+        } catch (err) {
+            if (err instanceof ApiError) throw err;
+            if (isDuplicateKeyError(err)) {
+                throw new ApiError({ code: "SERVER_NAME_TAKEN", message: "You already have a server with this name", statusCode: 409 });
+            }
+            throw err;
+        }
     }
 
     deleteServer = async (serverId: string | Types.ObjectId, requesterId: string | Types.ObjectId) => {
@@ -246,14 +303,33 @@ class serverServiceClass {
         if (existing.status === ServerStatus.ACTIVE) {
             throw new ApiError({ code: "SERVER_ALREADY_ACTIVE", message: "Server is already active", statusCode: 409 })
         }
+        // Enforce name uniqueness on restore - partial index excludes DELETED, so check conflict
+        const normalized = (existing as unknown as { nameNormalized?: string }).nameNormalized ?? normalizeServerName(existing.name);
+        const dupOnRestore = await this.serverDB.findOne({
+            ownerId: existing.ownerId,
+            nameNormalized: normalized,
+            _id: { $ne: existing._id },
+            status: { $ne: ServerStatus.DELETED },
+        } as never).exec();
+        if (dupOnRestore) {
+            throw new ApiError({ code: "SERVER_NAME_TAKEN", message: "Cannot restore: you already have an active server with this name. Please rename first.", statusCode: 409 });
+        }
         // restore from DELETED or SUSPENDED -> ACTIVE, clear deletedAt and isDeleted flag
-        const restored = await this.serverRepo.updateDetails(serverId, {
-            status: ServerStatus.ACTIVE,
-            deletedAt: null,
-            settings: { isDeleted: false },
-        })
-        if (!restored) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
-        return toServerResponseDTO(restored as never)
+        try {
+            const restored = await this.serverRepo.updateDetails(serverId, {
+                status: ServerStatus.ACTIVE,
+                deletedAt: null,
+                settings: { isDeleted: false },
+            } as never)
+            if (!restored) throw new ApiError({ code: "SERVER_NOT_FOUND", message: "Server not found", statusCode: 404 })
+            return toServerResponseDTO(restored as never)
+        } catch (err) {
+            if (err instanceof ApiError) throw err;
+            if (isDuplicateKeyError(err)) {
+                throw new ApiError({ code: "SERVER_NAME_TAKEN", message: "Cannot restore: name conflict with existing server", statusCode: 409 });
+            }
+            throw err;
+        }
     }
 }
 

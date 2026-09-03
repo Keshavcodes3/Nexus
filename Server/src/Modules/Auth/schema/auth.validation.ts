@@ -13,11 +13,26 @@ export const registerSchema = z.object({
     displayName: z.string().min(1).max(32).trim().optional(),
 });
 
-export const loginSchema = z.object({
-    // Nexus allows login with either email or username (Discord-style)
-    identifier: z.string().min(2).trim(), // email or username
-    password: z.string().min(1),
-});
+export const loginSchema = z
+    .object({
+        // Nexus allows login with either email or username (Discord-style)
+        // Accept `identifier` (preferred), but also accept `email` / `username` for backwards compat
+        // with clients that send { email, password } or { username, password }
+        identifier: z.string().trim().optional(),
+        email: z.string().trim().optional(),
+        username: z.string().trim().optional(),
+        password: z.string().min(1),
+    })
+    .transform((data) => ({
+        identifier: (data.identifier?.trim() || data.email?.trim() || data.username?.trim() || "").trim(),
+        password: data.password,
+    }))
+    .pipe(
+        z.object({
+            identifier: z.string().min(2, "identifier is required"),
+            password: z.string().min(1),
+        }),
+    );
 
 export const refreshSchema = z.object({
     refreshToken: z.string().min(1).optional(), // allow from cookie too

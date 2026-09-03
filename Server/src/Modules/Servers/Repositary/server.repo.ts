@@ -49,11 +49,12 @@ export class ServerRepository {
 
     async updateDetails(
         serverId: ObjectIdLike,
-        data: UpdateServerDTO,
+        data: UpdateServerDTO & { nameNormalized?: string | undefined },
     ): Promise<ServerDocument | null> {
         const setPayload: Record<string, unknown> = {};
 
         if (data.name !== undefined) setPayload["name"] = data.name;
+        if ((data as { nameNormalized?: string }).nameNormalized !== undefined) setPayload["nameNormalized"] = (data as { nameNormalized?: string }).nameNormalized;
         if (data.slug !== undefined) setPayload["slug"] = data.slug;
         if (data.description !== undefined) setPayload["description"] = data.description;
         if (data.icon !== undefined) setPayload["icon"] = data.icon;

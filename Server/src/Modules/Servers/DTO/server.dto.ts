@@ -48,6 +48,7 @@ export interface CreateServerInputDTO {
 
 export interface UpdateServerDTO {
     name?: string | undefined;
+    nameNormalized?: string | undefined;
     slug?: string | undefined;
     description?: string | null | undefined;
     icon?: ServerIconDTO | null | undefined;
@@ -59,6 +60,7 @@ export interface UpdateServerDTO {
 }
 
 export interface ServerResponseDTO {
+    _id: string;
     id: string;
     name: string;
     slug: string;
@@ -67,6 +69,7 @@ export interface ServerResponseDTO {
     ownerId: string;
     status: ServerStatus;
     settings: IServerSettings;
+    isDeleted: boolean;
     memberCount: number;
     channelCount: number;
     deletedAt: Date | null;
@@ -75,8 +78,10 @@ export interface ServerResponseDTO {
 }
 
 export function toServerResponseDTO(doc: IServer & { _id: Types.ObjectId; createdAt: Date; updatedAt: Date }): ServerResponseDTO {
+    const idStr = doc._id.toString();
     return {
-        id: doc._id.toString(),
+        _id: idStr,
+        id: idStr,
         name: doc.name,
         slug: doc.slug,
         description: doc.description ?? null,
@@ -84,6 +89,7 @@ export function toServerResponseDTO(doc: IServer & { _id: Types.ObjectId; create
         ownerId: doc.ownerId.toString(),
         status: doc.status,
         settings: doc.settings,
+        isDeleted: doc.settings?.isDeleted ?? false,
         memberCount: doc.memberCount,
         channelCount: doc.channelCount,
         deletedAt: doc.deletedAt ?? null,

@@ -22,6 +22,7 @@ export interface IServerSettings {
 
 export interface IServer {
     name: string;
+    nameNormalized: string;
     slug: string;
     description?: string;
 
@@ -107,6 +108,16 @@ const serverSchema = new Schema<IServer>(
             maxlength: 100,
         },
 
+        nameNormalized: {
+            type: String,
+            required: false,
+            trim: true,
+            lowercase: true,
+            minlength: 1,
+            maxlength: 100,
+            index: true,
+        },
+
         slug: {
             type: String,
             required: true,
@@ -176,11 +187,36 @@ const serverSchema = new Schema<IServer>(
     },
 );
 
+export function normalizeServerName(name: string): string {
+    return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+(serverSchema as unknown as { pre: (hook: string, fn: (next: (err?: Error) => void) => void) => void }).pre("validate", function (this: any, next: (err?: Error) => void) {
+    if (this.isModified("name") || this.isNew) {
+        const raw = (this as unknown as { name?: string }).name;
+        if (typeof raw === "string" && raw.trim()) {
+            (this as unknown as { nameNormalized: string }).nameNormalized = normalizeServerName(raw);
+        }
+    }
+    next();
+});
+
 serverSchema.index(
     { slug: 1 },
     {
         unique: true,
         name: "idx_servers_slug_unique",
+    },
+);
+
+// Enforce {ownerId, nameNormalized} unique only for non-deleted servers
+// Allows reuse after soft-delete and handles case-insensitive + whitespace-insensitive uniqueness
+serverSchema.index(
+    { ownerId: 1, nameNormalized: 1 },
+    {
+        unique: true,
+        name: "idx_servers_owner_name_unique",
+        partialFilterExpression: { status: { $ne: "DELETED" }, nameNormalized: { $exists: true } },
     },
 );
 
