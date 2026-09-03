@@ -52,7 +52,6 @@ export class ServerRepository {
         serverId: ObjectIdLike,
         data: UpdateServerDTO,
     ): Promise<ServerDocument | null> {
-        // update name/description/icon/settings
         const setPayload: Record<string, unknown> = {};
 
         if (data.name !== undefined) setPayload["name"] = data.name;
