@@ -15,11 +15,11 @@ function isDuplicateKeyError(err: unknown): boolean {
 }
 import mongoose, { Types } from "mongoose";
 import { serverClass } from "../Repositary/server.repo.js";
-import { Member } from "../../Channels/Schema/member.schema.js";
+import { Channel } from "../../Channels/Schema/channel.schema.js";
 import { IdempotencyRepository } from "../../../shared/Idempotency/idempotency.repo.js";
 import { OutboxRepository } from "../../../shared/Outbox/outbox.repo.js";
 import { OutboxEventStatus, OutboxEventType } from "../../../shared/Outbox/outbox.schema.js";
-
+import { Member } from "../../Member/Schema/member.schema.js";
 
 class serverServiceClass {
     private userDB = UserModel;
